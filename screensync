@@ -1,0 +1,79 @@
+#!/bin/bash
+
+# screensync
+# ----------
+# A helper to send simultaneous keypresses to all windows in a given
+# GNU Screen session, similar to tmux's synchronize-panes option.
+
+# See README.txt for important information.
+
+# Save the command line in case e.g. a session was specified by name.
+SCREEN="screen $@"
+
+# Exit on error, especially if no screen found or screen went away.
+set -e
+
+# Most paste-safe encapsulation for Ctrl-Keys I could come up with.
+CHAR_CTRL_A=$(printf "%b" "\001")
+CHAR_CTRL_B=$(printf "%b" "\002")
+CHAR_CTRL_C=$(printf "%b" "\003")
+
+function send_to_screen() {
+	if [[ "$1" == "$CHAR_CTRL_A" ]]
+	then
+		# Exit if Ctrl+A was pressed.
+		echo "bye"
+		exit
+	elif [[ "$1" == "$CHAR_CTRL_B" ]]
+	then
+		if [[ -v APPMODE ]]
+		then
+			# Switch terminal to standard mode
+			tput rmkx
+			unset APPMODE
+			printf "Application mode: off\n"
+		else
+			tput smkx
+			APPMODE=1
+			printf "Application mode: on\n"
+		fi
+		return
+	fi
+	# Suppress annoying paste event announcements
+	$SCREEN -X msgwait 0
+	# Assign our byte to register a
+	$SCREEN -X register a "$1"
+	# Paste contents of register a to all windows
+	$SCREEN -X at '#' paste a
+}
+
+# Suppress local Ctrl+C, so it can be passed to the screen session
+function ctrlc() {
+	# In trap handler, suppress Ctrl+C handling altogether
+	# So the following send call can't be interrupted
+	trap '' INT 
+	send_to_screen "$CHAR_CTRL_C"
+	# Back to normal
+	trap ctrlc INT
+}
+trap ctrlc INT
+
+function cleanup() {
+	# Go back to original tty settings (including local echo)
+	stty "$STTY_ORIG"
+	# Switch keyboard back to standard (non application) mode
+	tput rmkx
+}
+trap cleanup QUIT TERM EXIT
+
+# Suppress local echo
+STTY_ORIG=$(stty -g)
+stty -echo
+
+$SCREEN -Q info > /dev/null
+
+printf "(Ctrl+A to exit, Ctrl+B to switch terminal to application mode.)\n"
+while read -s -r -N 1 
+do
+	send_to_screen "$REPLY"
+done < /dev/tty
